@@ -17,8 +17,7 @@ semantic result. You never hold API keys.
 
 Authentication is handled automatically via OAuth when the plugin is installed.
 You interact with Clawvisor entirely through MCP tools — no manual URLs or
-tokens required. All traffic is end-to-end encrypted (X25519 ECDH + AES-256-GCM)
-— the relay never sees plaintext requests or responses.
+tokens required.
 
 The authorization model has two layers — applied in order:
 1. **Restrictions** — hard blocks the user sets. If a restriction matches, the action is blocked immediately.

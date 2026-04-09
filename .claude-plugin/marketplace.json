@@ -12,7 +12,7 @@
     {
       "name": "clawvisor",
       "source": "clawvisor",
-      "description": "Route actions through Clawvisor for credential vaulting, task-scoped authorization, and human approval flows. Connects via relay — no local daemon required.",
+      "description": "Route actions through Clawvisor for credential vaulting, task-scoped authorization, and human approval flows. Connects to the Clawvisor cloud.",
       "version": "0.1.0"
     },
     {

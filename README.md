@@ -6,7 +6,7 @@ Official [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin
 
 | Plugin | Connection | Description |
 |--------|------------|-------------|
-| **clawvisor** | Via relay | Connects through `relay.clawvisor.com` with E2E encryption. OAuth pairing on first use. |
+| **clawvisor** | Cloud | Connects to `app.clawvisor.com`. OAuth on first use. |
 | **clawvisor-local** | Direct | Connects directly to your local daemon at `localhost:25297`. No relay involved. |
 
 Both plugins provide the same MCP tools and authorization model. Choose based on your setup:

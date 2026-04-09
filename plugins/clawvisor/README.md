@@ -2,7 +2,7 @@
 
 A [Claude Code plugin](https://code.claude.com/docs/en/plugins) that lets Claude route actions through [Clawvisor](https://clawvisor.com) — a credential-vaulting gateway for AI agents. Agents declare tasks, users approve scope, and Clawvisor handles credential injection, execution, and audit logging. Agents never hold credentials.
 
-This plugin connects via the Clawvisor relay. All traffic is end-to-end encrypted (X25519 ECDH + AES-256-GCM) — the relay never sees plaintext requests or responses. On first use, you'll be prompted to authenticate via OAuth, which pairs the plugin with your local Clawvisor daemon automatically.
+This plugin connects to the Clawvisor cloud at `app.clawvisor.com`. On first use, you'll be prompted to authenticate via OAuth.
 
 ## Supported Services
 
