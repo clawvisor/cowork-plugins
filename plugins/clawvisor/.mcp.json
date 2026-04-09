@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "clawvisor": {
+      "type": "http",
+      "url": "https://relay.clawvisor.com/mcp"
+    }
+  }
+}

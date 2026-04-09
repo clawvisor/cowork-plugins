@@ -1,0 +1,10 @@
+{
+  "name": "clawvisor-local",
+  "version": "0.1.0",
+  "description": "Route actions through a local Clawvisor daemon for credential vaulting, task-scoped authorization, and human approval flows. Requires a running daemon on localhost.",
+  "author": {
+    "name": "Clawvisor"
+  },
+  "homepage": "https://clawvisor.com",
+  "repository": "https://github.com/clawvisor/cowork-plugins"
+}
