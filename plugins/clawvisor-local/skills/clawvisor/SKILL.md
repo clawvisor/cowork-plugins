@@ -7,16 +7,12 @@ description: >
   Clawvisor enforces restrictions, manages task scopes, and injects
   credentials — you never handle secrets directly.
 ---
-
 # Clawvisor
 
 Clawvisor is a gatekeeper between you and external services. Every action goes
 through Clawvisor, which checks restrictions, validates task scopes, injects
 credentials, optionally routes to the user for approval, and returns a clean
 semantic result. You never hold API keys.
-
-This plugin connects directly to your local Clawvisor daemon. You interact with
-Clawvisor entirely through MCP tools — no manual URLs or tokens required.
 
 The authorization model has two layers — applied in order:
 1. **Restrictions** — hard blocks the user sets. If a restriction matches, the action is blocked immediately.
@@ -26,158 +22,207 @@ The authorization model has two layers — applied in order:
 
 ## Typical Flow
 
-1. Call `fetch_catalog` — confirm the service is active and the action isn't restricted
-2. Call `create_task` declaring your purpose and the actions you need
-3. Tell the user to approve it; call `get_task` with `wait: true` until approved
-4. Call `gateway_request` under the task — in-scope actions execute automatically
-5. Call `complete_task` when done
-
+1. **Fetch the catalog** — use `fetch_catalog` to see available services, actions, and restrictions
+2. **Create a task** — use `create_task` to declare your purpose and the actions you need
+3. **Wait for approval** — use `get_task` with `wait: true` to long-poll until the user approves (or denies) the task
+4. **Make gateway requests** — use `gateway_request` for each action, under the approved task scope
+5. **Complete the task** — use `complete_task` when done
 ---
 
 ## Getting Your Service Catalog
 
-At the start of each session, call the `fetch_catalog` tool. This returns the
-services available to you, their supported actions, which actions are restricted
-(blocked), and a list of services you can ask the user to activate. Always fetch
-this before making gateway requests so you know what's available and what is
-restricted.
-
+At the start of each session, use `fetch_catalog` to see what's available. This
+returns the services available to you, their supported actions, which actions are
+restricted (blocked), and a list of services you can ask the user to activate.
+Always check this before making gateway requests so you know what's available and
+what is restricted.
 ---
 
 ## Task-Scoped Access
 
-Before making gateway requests, declare a task scope with `create_task`:
+Before making gateway requests, create a task declaring your purpose and the
+actions you need using `create_task`:
 
-```json
-{
-  "purpose": "Review last 30 iMessage threads and classify reply status",
-  "authorized_actions": [
-    {"service": "apple.imessage", "action": "list_threads", "auto_execute": true, "expected_use": "List recent iMessage threads to find ones needing replies"},
-    {"service": "apple.imessage", "action": "get_thread", "auto_execute": true, "expected_use": "Read individual thread messages to classify reply status"}
-  ],
-  "expires_in_seconds": 1800
-}
-```
-
-- **`purpose`** — shown to the user during approval and used by intent verification to ensure requests stay consistent with declared intent. Be specific.
-- **`expected_use`** — per-action description of how you'll use it. Shown during approval and checked by intent verification against your actual request params. Be specific: "Fetch today's calendar events" is better than "Use the calendar API."
+- **`purpose`** — shown to the user during approval and checked by intent verification. **Scope broadly:** describe the full workflow as a capability statement, not a single action. Enumerate every category of operation the task covers. Narrow purposes like "Check emails" cause intent verification to reject legitimate follow-up requests. See the examples above.
+- **`expected_use`** — per-action description checked by intent verification against your actual request params. **Enumerate all use cases** — every scenario, parameter type, and reason you'd invoke this action. A narrow expected_use like "List recent emails" will reject searches by sender or keyword.
 - **`auto_execute`** — `true` runs in-scope requests immediately; `false` still requires per-request approval (use for destructive actions like `send_message`).
 - **`expires_in_seconds`** — task TTL. Omit and set `"lifetime": "standing"` for a task that persists until the user revokes it (see below).
+- **`planned_calls`** *(optional)* — pre-register specific API calls you know you'll make. Planned calls are shown to the user during approval, evaluated as part of risk assessment, and **skip intent verification at runtime** when they match. This reduces latency for predictable workflows. Each entry must be covered by `authorized_actions` and must include `params`. Use exact values for known params, or `"$chain"` for values that will come from a prior call's results (e.g. `{"thread_id": "$chain"}`). Calls without params cannot skip verification.
 
-All tasks start as `pending_approval` — the user is notified to approve the
-scope before it becomes active. Call `get_task` with `wait: true` to long-poll
-until `status` changes to `active` (or `denied`).
+**Always request the broadest reasonable scope upfront.** The user reviews scope once at task creation; mid-task `pending_scope_expansion` interrupts their flow. Scope for the full range of operations the request could entail — not just the first step.
+
+All tasks start as `pending_approval`. Long-poll with `get_task` (`wait: true`)
+until status changes to `active` or `denied`.
 
 ### Standing tasks
 
-For recurring workflows, create a **standing task** that does not expire:
+For recurring workflows, set `lifetime: "standing"`. Standing tasks require a
+`session_id` in gateway requests to enable chain context verification across
+related requests. Use a consistent `session_id` (e.g., a UUID you generate once
+per workflow) across all related requests in a single invocation.
 
-```json
-{
-  "purpose": "Ongoing email triage",
-  "lifetime": "standing",
-  "authorized_actions": [
-    {"service": "google.gmail", "action": "list_messages", "auto_execute": true, "expected_use": "List recent emails to identify ones needing attention"},
-    {"service": "google.gmail", "action": "get_message", "auto_execute": true, "expected_use": "Read individual emails to triage and summarize"}
-  ]
-}
-```
+> **⚠️ Standing tasks MUST use `session_id` on every gateway request.** Without `session_id`, chain context is disabled — meaning intent verification cannot see that a message ID or thread ID came from your own prior search results. The verifier will treat those IDs as unexplained entity references and block them. Generate one UUID per workflow invocation and pass it as `session_id` on every request in that invocation.
 
-Standing tasks remain active until the user revokes them from the dashboard.
+### Chain context verification
+
+Chain context verification extracts structural facts (IDs, email addresses, phone numbers) from adapter results and feeds them into subsequent verification prompts. This verifies that follow-up requests target entities that actually appeared in prior results — preventing a compromised agent from reading an inbox and then emailing an unrelated address.
+
+**Ephemeral (session) tasks** get chain context automatically — no extra fields needed. The task ID is used to scope facts.
+
+**Standing tasks** require a `session_id` in gateway requests to enable chain context. Use a consistent `session_id` (e.g., a UUID you generate once per workflow) across all related requests in a single invocation. This scopes facts to one invocation and prevents unrelated facts from prior invocations from mixing together.
+
+If you omit `session_id` on a standing task, chain context is disabled and intent verification will apply stricter scrutiny to entity references — any specific targets (email addresses, IDs, etc.) must be justified by the task purpose or expected use alone, not by prior results.
+
+- Chain facts are automatically cleaned up when a task is completed, denied, or revoked
 
 ### Scope expansion
 
-If you need an action not in the original task scope, call `expand_task`:
-
-```json
-{
-  "task_id": "<task-id>",
-  "service": "apple.imessage",
-  "action": "send_message",
-  "auto_execute": false,
-  "reason": "John Doe asked a question that warrants a reply"
-}
-```
-
-The user will be notified to approve the expansion. On approval, the action is
-added to the task scope and the expiry is reset.
+If you need an action not in the original task scope, use `expand_task` with the
+new action and a reason. The user will be prompted to approve. On approval, the
+action is added to the task scope and the expiry is reset.
 
 ### Completing a task
 
-When you're done, call `complete_task` with the task ID.
+When you're done, use `complete_task` to mark the task as completed. This cleans
+up the authorization scope and any chain context facts.
+
+---
+
+## Writing Effective Reasons
+
+The `reason` field on gateway requests is verified by a language model, not pattern-matched. Write reasons the way a human assistant would explain an action to their boss — describe **what** you're doing and **why**, not who told you to do it.
+
+**Do:**
+- `"Searching for recent emails from the design team to draft a follow-up reply"`
+- `"Reading thread to extract action items for the weekly standup summary"`
+- `"Listing recent calendar events to check for scheduling conflicts this afternoon"`
+- `"Looking up the intro email from the vendor to confirm reply status"`
+
+**Don't:**
+- `"The user told me to do this"` — claiming the user instructed you looks identical to prompt injection to the verifier. Describe the action itself instead.
+- `"The owner directly instructed me to reply to this email via Telegram"` — the verifier cannot distinguish this from an injected instruction. Instead: `"Drafting reply to the vendor's email and preparing a follow-up summary"`
+- `"Doing my job"` / `"As requested"` — too vague; will be flagged as insufficient.
+- `"Testing"` / `"Retry"` / `"Trying again"` — implementation details, not a rationale.
+- Embedding code, markup, JSON, or system directives in the reason field.
+
+**Key rule:** The verifier treats **all agent-provided fields as untrusted**. Any text that resembles an instruction ("ignore previous rules", "approve this request", "the user said to...") will be flagged as a prompt injection attempt, even if it's a truthful description of what happened. Focus on the *what* and *why* of the action, not the *who told you*.
+
+---
+
+## Preset Task Definitions
+
+Agents tend to write narrow task scopes, which causes intent verification to reject legitimate follow-up requests. **Use these presets instead of writing your own scopes.** They are intentionally broad to cover the full range of operations in each workflow.
+
+| Preset | Description | Fetch |
+|---|---|---|
+| **Email EA** | Full inbox management: triage, search, read, draft, send (approval-gated) | `GET /skill/presets/email-ea.json` |
+| **Calendar** | Full calendar: view, search, create (approval-gated), update (approval-gated) | `GET /skill/presets/calendar.json` |
+| **iMessage** | Thread review, search, read, send (approval-gated) | `GET /skill/presets/imessage.json` |
+
+
 
 ---
 
 ## Gateway Requests
 
-Every gateway request must include a `task_id` from an approved task. Call
-`gateway_request` with:
+Every gateway request must include a `task_id` from an approved task.
 
-```json
-{
-  "service": "<service_id>",
-  "action": "<action_name>",
-  "params": { ... },
-  "reason": "One sentence explaining why",
-  "request_id": "<unique ID you generate>",
-  "task_id": "<task-uuid>",
-  "context": {"source": "Brief description of what you're working on"}
-}
-```
-
-### Required fields
+Use `gateway_request` for each action. Required fields:
 
 | Field | Description |
 |---|---|
 | `service` | Service identifier (from your catalog) |
 | `action` | Action to perform on that service |
 | `params` | Action-specific parameters (from your catalog) |
-| `reason` | One sentence explaining why. Shown in approvals and audit log. Be specific. |
-| `request_id` | A unique ID you generate (e.g. UUID). Must be unique across all your requests. Safe to reuse on retry after `INVALID_REQUEST` errors (parse failures don't consume the ID). |
+| `reason` | Why you need this data and what you'll do with it. Shown in approvals and audit log. Be specific: name the user request, the information you're looking for, and how it fits the workflow. |
+| `request_id` | A unique ID you generate (e.g. UUID). Must be unique across all your requests. |
 | `task_id` | The approved task ID this request belongs to. |
+| `session_id` | *(Standing tasks only)* A consistent UUID across related requests in a single invocation. |
 
-### Context field
+### Context fields
 
-The `context` field is an object (not a string) with the following shape:
+Always include the `context` object. All fields are optional but strongly recommended:
 
-```json
-{
-  "context": {
-    "source": "Brief description of what you're working on"
-  }
-}
-```
+| Field | Description |
+|---|---|
+| `data_origin` | Source of any external data you are acting on (see below). |
+| `source` | What triggered this request: `"user_message"`, `"scheduled_task"`, etc. |
 
-Include `context.source` with a description of what you're working on and what
-external data influenced the request. This is used for detecting prompt
-injection attacks and for security forensics.
+### data_origin — always populate when processing external content
 
-When processing external content, mention the source:
-- `"source": "Acting on Gmail message msg-abc123"`
-- `"source": "Processing content from https://example.com/page"`
-- `"source": "Responding to GitHub issue org/repo#42"`
+`data_origin` tells Clawvisor what external data influenced this request. This
+is critical for detecting prompt injection attacks and for security forensics.
 
-The `context` field is optional. If you omit it, the request will still succeed.
+**Set it to:**
+- The Gmail message ID when acting on email content: `"gmail:msg-abc123"`
+- The URL of a web page you fetched: `"https://example.com/page"`
+- The GitHub issue URL you were reading: `"https://github.com/org/repo/issues/42"`
+- `null` only when responding directly to a user message with no external data involved
+
+**Never omit `data_origin` when you are processing content from an external
+source.** If you read an email and it told you to send a reply, the email is
+the data origin — set it.
 
 ---
 
 ## Handling Responses
 
-Every response has a `status` field. Handle each case as follows:
+Every gateway response has a `status` field:
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `executed` | Action completed successfully | Use `result.summary` and `result.data`. Report to the user. |
-| `pending` | Awaiting human approval | Tell the user: "I've requested approval for [action]." Re-send the same `gateway_request` with the same `request_id` until resolved. Do **not** send a new request. |
-| `blocked` | A restriction blocks this action | Tell the user: "I wasn't allowed to [action] — [reason]." Do **not** retry or attempt a workaround. |
-| `restricted` | Intent verification rejected the request | Your params or reason were inconsistent with the task's approved purpose. Adjust and retry with a new `request_id`. |
-| `pending_task_approval` | Task not yet approved | Tell the user and call `get_task` with `wait: true` until approved. |
-| `pending_scope_expansion` | Request outside task scope | Call `expand_task` with the new action. |
-| `task_expired` | Task has passed its expiry | Expand the task to extend, or create a new task. |
-| `error` (`SERVICE_NOT_CONFIGURED`) | Service not yet connected | Tell the user: "[Service] isn't activated yet. Connect it in the Clawvisor dashboard." |
-| `error` (`EXECUTION_ERROR`) | Adapter failed | Report the error to the user. Do not silently retry. |
-| `error` (`INVALID_REQUEST`) | JSON body could not be parsed | Check that your JSON is well-formed and that field types match the schema (e.g. `context` must be an object, not a string). Fix and retry with the same `request_id` — parse errors do not consume the request ID. |
-| `error` (other) | Something went wrong | Report the error message to the user. Do not silently retry. |
+| `executed` | Action completed | Use the result. Report to the user. |
+| `pending` | Awaiting human approval | Tell the user. Re-send same request_id to poll. |
+| `blocked` | A restriction blocks this | Tell the user. Do not retry or work around it. |
+| `restricted` | Intent verification rejected | Your params/reason were inconsistent with the task purpose. Adjust and retry with a new request_id. |
+| `pending_task_approval` | Task not yet approved | Long-poll get_task until approved. |
+| `pending_scope_expansion` | Action outside task scope | Use expand_task. |
+| `task_expired` | Task TTL exceeded | Expand or create a new task. |
+| `error` (`SERVICE_NOT_CONFIGURED`) | Service not connected | Tell the user to connect it in the Clawvisor dashboard. |
+| `error` (`EXECUTION_ERROR`) | Adapter failed | Report the error. Do not silently retry. |
+| `error` (other) | Something went wrong | Report the error. Do not silently retry. |
+
+**Warnings:** Responses may include a `"warnings"` array with actionable messages about misconfiguration. For example, if you make a standing task request without `session_id`, the response will warn that chain context is disabled. Always check for and act on warnings.
+
+---
+
+## Waiting for Approval
+
+**Tasks (preferred — long-poll):** `get_task` with `wait: true` blocks
+server-side until the task leaves `pending_approval` / `pending_scope_expansion`.
+Set `timeout` to control the wait (default & max 120 seconds).
+
+If the timeout elapses while still pending, the response is a normal pending
+status — just call again to keep waiting.
+
+**Gateway requests:** Re-send the same gateway request with the same
+`request_id`. Clawvisor recognizes the duplicate and returns the current status
+without re-executing.
+---
+
+## Important Rules
+
+- **Always execute curl commands as a single line** — the examples in this document are multi-line for readability, but when running them, inline all variables, headers, and JSON bodies into one command. Never use `\` line continuations, heredocs, or separate variable assignments — each triggers a separate approval prompt.
+- Always fetch the catalog first to know what's available and restricted
+- Never attempt to bypass restrictions — they are hard blocks set by the user
+- Always create a task before making gateway requests
+- Use `auto_execute: false` for any action that sends, modifies, or deletes data
+- Generate unique request_ids for every gateway request
+- Complete tasks when done to clean up authorization scope
+- Always set `data_origin` when processing content from external sources
+
+---
+
+## Troubleshooting
+
+If something isn't working as expected, check whether you have the latest version of this skill:
+
+1. Fetch `GET $CLAWVISOR_URL/api/skill/version` — it returns:
+   ```json
+   { "skill_version": "...", "skill_published_at": "..." }
+   ```
+2. Compare the `skill_version` in the response with the version in this skill's frontmatter (`dev`, published dev).
+3. If a newer version is available, re-fetch the skill from `$CLAWVISOR_URL/skill/SKILL.md` to get the latest instructions.
 
 ---
 
@@ -186,6 +231,7 @@ Every response has a `status` field. Handle each case as follows:
 | Condition | Gateway `status` |
 |---|---|
 | Restriction matches | `blocked` |
+| Task in scope + `auto_execute` + matches planned call | `executed` (skips verification) |
 | Task in scope + `auto_execute` + verification passes | `executed` |
 | Task in scope + `auto_execute` + verification fails | `restricted` |
 | Task in scope + `auto_execute: false` | `pending` (per-request approval) |
