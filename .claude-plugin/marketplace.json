@@ -11,13 +11,13 @@
   "plugins": [
     {
       "name": "clawvisor",
-      "source": "clawvisor",
+      "source": "./plugins/clawvisor",
       "description": "Route actions through Clawvisor for credential vaulting, task-scoped authorization, and human approval flows. Connects to the Clawvisor cloud.",
       "version": "0.1.0"
     },
     {
       "name": "clawvisor-local",
-      "source": "clawvisor-local",
+      "source": "./plugins/clawvisor-local",
       "description": "Route actions through a local Clawvisor daemon for credential vaulting, task-scoped authorization, and human approval flows. Requires a running daemon on localhost.",
       "version": "0.1.0"
     }
