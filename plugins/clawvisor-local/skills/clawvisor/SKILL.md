@@ -109,20 +109,6 @@ The `reason` field on gateway requests is verified by a language model, not patt
 
 ---
 
-## Preset Task Definitions
-
-Agents tend to write narrow task scopes, which causes intent verification to reject legitimate follow-up requests. **Use these presets instead of writing your own scopes.** They are intentionally broad to cover the full range of operations in each workflow.
-
-| Preset | Description | Fetch |
-|---|---|---|
-| **Email EA** | Full inbox management: triage, search, read, draft, send (approval-gated) | `GET /skill/presets/email-ea.json` |
-| **Calendar** | Full calendar: view, search, create (approval-gated), update (approval-gated) | `GET /skill/presets/calendar.json` |
-| **iMessage** | Thread review, search, read, send (approval-gated) | `GET /skill/presets/imessage.json` |
-
-
-
----
-
 ## Gateway Requests
 
 Every gateway request must include a `task_id` from an approved task.
@@ -183,6 +169,8 @@ Every gateway response has a `status` field:
 | `error` (other) | Something went wrong | Report the error. Do not silently retry. |
 
 **Warnings:** Responses may include a `"warnings"` array with actionable messages about misconfiguration. For example, if you make a standing task request without `session_id`, the response will warn that chain context is disabled. Always check for and act on warnings.
+
+**Pagination:** Results may be paginated. Check `result.meta` for continuation fields (e.g. `next_page_token`, `cursor`, `has_more`) and pass them as params in a follow-up gateway request to fetch the next page.
 
 ---
 
