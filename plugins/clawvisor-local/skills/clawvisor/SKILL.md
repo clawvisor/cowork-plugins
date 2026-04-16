@@ -43,13 +43,19 @@ what is restricted.
 Before making gateway requests, create a task declaring your purpose and the
 actions you need using `create_task`:
 
-- **`purpose`** — shown to the user during approval and checked by intent verification. **Scope broadly:** describe the full workflow as a capability statement, not a single action. Enumerate every category of operation the task covers. Narrow purposes like "Check emails" cause intent verification to reject legitimate follow-up requests. See the examples above.
-- **`expected_use`** — per-action description checked by intent verification against your actual request params. **Enumerate all use cases** — every scenario, parameter type, and reason you'd invoke this action. A narrow expected_use like "List recent emails" will reject searches by sender or keyword.
+- **`purpose`** — shown at approval and checked by intent verification. Capability statement covering the workflow's natural follow-ups. Size to task complexity (see below).
+- **`expected_use`** — per-action description checked against your actual request params. Cover the scenarios you'll use in this task.
 - **`auto_execute`** — `true` runs in-scope requests immediately; `false` still requires per-request approval (use for destructive actions like `send_message`).
 - **`expires_in_seconds`** — task TTL. Omit and set `"lifetime": "standing"` for a task that persists until the user revokes it (see below).
 - **`planned_calls`** *(optional)* — pre-register specific API calls you know you'll make. Planned calls are shown to the user during approval, evaluated as part of risk assessment, and **skip intent verification at runtime** when they match. This reduces latency for predictable workflows. Each entry must be covered by `authorized_actions` and must include `params`. Use exact values for known params, or `"$chain"` for values that will come from a prior call's results (e.g. `{"thread_id": "$chain"}`). Calls without params cannot skip verification.
 
-**Always request the broadest reasonable scope upfront.** The user reviews scope once at task creation; mid-task `pending_scope_expansion` interrupts their flow. Scope for the full range of operations the request could entail — not just the first step.
+### Sizing scope to task complexity
+
+Scope should cover operations likely *within this task's lifecycle* — no more. Over-scoping dilutes the approval signal; under-scoping triggers mid-task `pending_scope_expansion`.
+
+- **Simple** ("check my email for the last 72 hours"): tight. See the iMessage example above.
+- **Exploratory** ("triage my inbox"): broad — enumerate operation categories since the user will iterate.
+- **Standing** (persist across invocations): exhaustive capability charter. See the Gmail example below.
 
 For examples of well-scoped tasks and effective gateway requests, see the [Task & Request Examples](https://github.com/clawvisor/clawvisor/blob/main/docs/TASK_EXAMPLES.md).
 
