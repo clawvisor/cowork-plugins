@@ -53,7 +53,7 @@ actions you need using `create_task`:
 
 Scope should cover operations likely *within this task's lifecycle* — no more. Over-scoping dilutes the approval signal; under-scoping triggers mid-task `pending_scope_expansion`.
 
-- **Simple** ("check my email for the last 72 hours"): tight. See the iMessage example above.
+- **Simple** ("check my email for the last 72 hours"): tight. See the calendar example above.
 - **Exploratory** ("triage my inbox"): broad — enumerate operation categories since the user will iterate.
 - **Standing** (persist across invocations): exhaustive capability charter. See the Gmail example below.
 
