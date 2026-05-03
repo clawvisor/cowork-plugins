@@ -46,6 +46,7 @@ actions you need using `create_task`:
 - **`purpose`** — shown at approval and checked by intent verification. Capability statement covering the workflow's natural follow-ups. Size to task complexity (see below).
 - **`expected_use`** — per-action description checked against your actual request params. Cover the scenarios you'll use in this task.
 - **`auto_execute`** — `true` runs in-scope requests immediately; `false` still requires per-request approval (use for destructive actions like `send_message`).
+- **`verification`** *(optional)* — per-scope intent verification mode: `"strict"` (default), `"lenient"`, or `"off"`. Use `"lenient"` for read/search scopes where strict mode frequently flags benign variation. The user can override this at approval and edit it anytime after.
 - **`expires_in_seconds`** — task TTL. Omit and set `"lifetime": "standing"` for a task that persists until the user revokes it (see below).
 - **`planned_calls`** *(optional)* — pre-register specific API calls you know you'll make. Planned calls are shown to the user during approval, evaluated as part of risk assessment, and **skip intent verification at runtime** when they match. This reduces latency for predictable workflows. Each entry must be covered by `authorized_actions` and must include `params`. Use exact values for known params, or `"$chain"` for values that will come from a prior call's results (e.g. `{"thread_id": "$chain"}`). Calls without params cannot skip verification.
 
@@ -159,6 +160,44 @@ the data origin — set it.
 
 ---
 
+## Batch Requests
+
+When you need to make several independent gateway calls — fanning out across
+accounts or services (e.g. list unread email + check calendar + check Slack
+mentions) — use the batch endpoint instead of N sequential single requests.
+Sub-requests run concurrently on the server and are returned in one response,
+saving one round-trip per sub-request.
+
+Use `gateway_batch` with a `requests` array. Each entry has the same shape as
+a `gateway_request` call.
+
+**Rules:**
+
+- **Max 20 sub-requests per batch.** Split larger fan-outs into multiple batches.
+- **Each sub-request is independent.** It runs through the full single-request pipeline (auth, task scope, intent verification, audit). `task_id`, `reason`, and `request_id` are required on *every* sub-request — just like a single call.
+- **One sub-request failing does not abort the batch.** The batch returns HTTP 200 with an ordered `results` array; each entry carries its own `status` / `code` / `error` or `result`. Read each sub-result individually.
+- **Ordering is preserved.** `results[i]` corresponds to `requests[i]`.
+- **Not all sub-requests need the same task.** Each sub-request names its own `task_id`. You can fan out across multiple active tasks in one batch.
+- **Approval flows still apply.** A sub-request that needs human approval returns `status: pending` — follow up with `execute_request` for that specific request_id, not by re-batching.
+- **Don't use batch for dependent calls.** If request B needs data from request A's result (e.g. get_event needs event_id from list_events), call them sequentially — batch runs everything concurrently.
+
+**Response shape:**
+
+```json
+{
+  "results": [
+    {"status": "executed", "request_id": "r-1", "audit_id": "...", "result": {...}},
+    {"status": "executed", "request_id": "r-2", "audit_id": "...", "result": {...}}
+  ]
+}
+```
+
+If the top-level request is malformed (empty array, over 20 entries, bad JSON),
+the whole batch fails with a single error envelope carrying `BATCH_EMPTY`,
+`BATCH_TOO_LARGE`, or `INVALID_REQUEST`.
+
+---
+
 ## Handling Responses
 
 Every gateway response has a `status` field:
@@ -173,10 +212,29 @@ Every gateway response has a `status` field:
 | `pending_scope_expansion` | Action outside task scope | Use expand_task. |
 | `task_expired` | Task TTL exceeded | Expand or create a new task. |
 | `error` (`SERVICE_NOT_CONFIGURED`) | Service not connected | Tell the user to connect it in the Clawvisor dashboard. |
-| `error` (`EXECUTION_ERROR`) | Adapter failed | Report the error. Do not silently retry. |
+| `error` (`ADAPTER_ERROR`) | Downstream adapter call failed | Report the error. Do not silently retry. |
 | `error` (other) | Something went wrong | Report the error. Do not silently retry. |
 
 **Warnings:** Responses may include a `"warnings"` array with actionable messages about misconfiguration. Always check for and act on warnings.
+
+### Machine-parseable error codes
+
+Every non-`executed` response includes a stable `code` field (in addition to the human-readable `reason`/`error`/`message` prose). **Switch on `code`, not on the prose** — prose may change without notice.
+
+| Code | Emitted when | Typical `status` |
+|---|---|---|
+| `RESTRICTED` | A user restriction or org policy blocked the action | `blocked` |
+| `SCOPE_MISMATCH` | Action not covered by the approved task scope | `pending_scope_expansion` |
+| `REASON_TOO_VAGUE` | Intent verifier judged the `reason` field incoherent or insufficient | `restricted` |
+| `PARAM_VIOLATION` | Params inconsistent with task scope or chain context | `restricted` |
+| `ADAPTER_ERROR` | Downstream service call failed | `error` |
+| `RATE_LIMITED` | Per-agent rate limit exceeded (HTTP 429) | — |
+| `UNKNOWN_SERVICE` / `UNKNOWN_ACTION` | Service or action not recognized | `error` |
+| `INVALID_REQUEST` / `INVALID_PARAMS` / `MISSING_REASON` / `TASK_REQUIRED` | Request validation failed | — |
+| `MISSING_SESSION_ID` | Standing task request without `session_id` | — |
+| `INTERNAL_ERROR` | Unexpected server error | `error` |
+
+When `code` is `REASON_TOO_VAGUE`, rewrite your `reason` to be more specific (see *Writing Effective Reasons*). When it's `SCOPE_MISMATCH`, use `expand_task`. When it's `ADAPTER_ERROR`, the downstream service is at fault — report to the user and stop; don't retry.
 
 **Pagination:** Results may be paginated. Check `result.meta` for continuation fields (e.g. `next_page_token`, `cursor`, `has_more`) and pass them as params in a follow-up gateway request to fetch the next page.
 
